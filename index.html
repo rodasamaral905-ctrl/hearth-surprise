@@ -3,9 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport"
-      content="width=device-width, initial-scale=1, viewport-fit=cover">
+ content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#000000">
-<title>For you</title>
+<title>Us</title>
 
 <style>
 * {
@@ -44,7 +44,6 @@ canvas {
   pointer-events: none;
 }
 
-/* Textura retro subtil */
 #texture {
   position: absolute;
   inset: 0;
@@ -52,43 +51,46 @@ canvas {
   opacity: 0;
   background: repeating-linear-gradient(
     to bottom,
-    transparent 0px,
+    transparent 0,
     transparent 3px,
     rgba(0,0,0,.2) 4px
   );
-  transition: opacity .4s;
 }
 
 #stage.active #texture {
   opacity: .55;
 }
 
-#cta {
+#caption {
   position: absolute;
-  left: 50%;
-  bottom: max(10%, env(safe-area-inset-bottom));
-  transform: translateX(-50%);
-  border: 1px solid rgba(255,255,255,.5);
-  padding: 16px 26px;
-  border-radius: 3px;
-  background: rgba(0,0,0,.55);
-  color: white;
-  font: 700 clamp(24px, 7vw, 42px)/1.1 Arial, sans-serif;
-  white-space: nowrap;
-  cursor: pointer;
-  box-shadow: 4px 4px 0 rgba(255,50,100,.4);
-  animation: breathe 1.5s ease-in-out infinite;
+  left: 0;
+  right: 0;
+  bottom: max(8%, env(safe-area-inset-bottom));
+  margin: 0;
+  padding: 0 18px;
+  color: #fff;
+  text-align: center;
+  font-size: clamp(46px, 14vw, 100px);
+  font-weight: 900;
+  line-height: 1;
+  letter-spacing: -.055em;
+  text-shadow:
+    2px 0 rgba(255,40,100,.6),
+    -2px 0 rgba(80,180,255,.4);
+  opacity: 0;
+  transform: translateY(12px);
+  transition: opacity .5s, transform .5s;
+  pointer-events: none;
 }
 
-#cta[hidden] {
-  display: none;
+#caption.visible {
+  opacity: 1;
+  transform: translateY(0);
 }
 
-@keyframes breathe {
-  50% {
-    filter: brightness(1.35);
-    box-shadow: 6px 6px 0 rgba(255,50,100,.65);
-  }
+#caption.small {
+  font-size: clamp(26px, 7vw, 44px);
+  letter-spacing: -.025em;
 }
 
 #message {
@@ -105,7 +107,7 @@ canvas {
   pointer-events: none;
   opacity: 0;
   transform: scale(.9);
-  transition: opacity .8s ease, transform 1s ease;
+  transition: opacity .9s ease, transform 1s ease;
 }
 
 #message.visible {
@@ -116,13 +118,11 @@ canvas {
 #words {
   width: 100%;
   margin: 0;
-  color: #fff;
-  font-family: Arial, Helvetica, sans-serif;
+  color: white;
   font-weight: 900;
   line-height: 1.02;
   letter-spacing: -.055em;
   text-align: center;
-  overflow-wrap: normal;
   text-shadow:
     2px 0 rgba(255,40,100,.6),
     -2px 0 rgba(80,180,255,.3);
@@ -135,11 +135,10 @@ canvas {
 </head>
 
 <body>
-<main id="stage" aria-label="Animação de um coração">
+<main id="stage" aria-label="Uma surpresa para ti">
   <canvas id="canvas" aria-hidden="true"></canvas>
   <div id="texture"></div>
-
-  <button id="cta" type="button" hidden>Clica aqui</button>
+  <p id="caption"></p>
 
   <div id="message">
     <p id="words">
@@ -152,482 +151,620 @@ canvas {
 
 <script>
 (() => {
-  "use strict";
+"use strict";
 
-  const stage = document.getElementById("stage");
-  const canvas = document.getElementById("canvas");
-  const ctx = canvas.getContext("2d");
-  const cta = document.getElementById("cta");
-  const message = document.getElementById("message");
-  const words = document.getElementById("words");
+const stage = document.getElementById("stage");
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+const caption = document.getElementById("caption");
+const message = document.getElementById("message");
+const words = document.getElementById("words");
 
-  let W = 1, H = 1, dpr = 1;
-  let state = "black";
-  let started = 0;
-  let exploded = 0;
-  let lastFrame = 0;
+const art = document.createElement("canvas");
+art.width = art.height = 320;
+const a = art.getContext("2d", {willReadFrequently: true});
 
-  let pieces = [];
-  let smoke = [];
-  let sparks = [];
-  let dust = [];
-  let heartSize = 1;
-  let heartX = 0, heartY = 0;
+let W = 1, H = 1, scale = 1, cx = 0, cy = 0;
+let state = "black";
+let scene = 0;
+let nextScene = 0;
+let startTime = 0;
+let lastTime = 0;
+let particles = [];
+let smoke = [];
+let sparks = [];
+let targets = [];
+let targetSets = [];
+let readyAfter = 0;
 
-  const random = (a, b) => a + Math.random() * (b - a);
-  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-  const ease = t => 1 - Math.pow(1 - t, 4);
+const COUNT = 760;
+const rand = (min, max) => min + Math.random() * (max - min);
+const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+const ease = t => 1 - Math.pow(1 - t, 4);
 
-  function fitText() {
-    const style = getComputedStyle(message);
-    const width = message.clientWidth
-      - parseFloat(style.paddingLeft)
-      - parseFloat(style.paddingRight);
-    const height = message.clientHeight
-      - parseFloat(style.paddingTop)
-      - parseFloat(style.paddingBottom);
+function fitText() {
+  const st = getComputedStyle(message);
+  const width = message.clientWidth
+    - parseFloat(st.paddingLeft)
+    - parseFloat(st.paddingRight);
+  const height = message.clientHeight
+    - parseFloat(st.paddingTop)
+    - parseFloat(st.paddingBottom);
 
-    let low = 8;
-    let high = Math.min(width * .2, 170);
+  let low = 8, high = Math.min(width * .2, 180);
 
-    for (let i = 0; i < 12; i++) {
-      const size = (low + high) / 2;
-      words.style.fontSize = size + "px";
+  for (let i = 0; i < 12; i++) {
+    const size = (low + high) / 2;
+    words.style.fontSize = size + "px";
 
-      if (words.scrollHeight <= height * .9 &&
-          words.scrollWidth <= width + 1) {
-        low = size;
-      } else {
-        high = size;
+    if (words.scrollHeight <= height * .9 &&
+        words.scrollWidth <= width + 1) {
+      low = size;
+    } else {
+      high = size;
+    }
+  }
+
+  words.style.fontSize = low + "px";
+}
+
+function resize() {
+  W = stage.clientWidth;
+  H = stage.clientHeight;
+
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  canvas.width = Math.round(W * dpr);
+  canvas.height = Math.round(H * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  scale = Math.min(W * .94, H * .65, 650);
+  cx = W / 2;
+  cy = H * .43;
+
+  fitText();
+}
+
+window.addEventListener("resize", resize);
+if (window.visualViewport) {
+  window.visualViewport.addEventListener("resize", resize);
+}
+resize();
+
+function ellipse(x, y, rx, ry, color, rotation = 0) {
+  a.fillStyle = color;
+  a.beginPath();
+  a.ellipse(x, y, rx, ry, rotation, 0, Math.PI * 2);
+  a.fill();
+}
+
+function polygon(points, color) {
+  a.fillStyle = color;
+  a.beginPath();
+  points.forEach(([x,y], i) => {
+    if (i === 0) a.moveTo(x,y);
+    else a.lineTo(x,y);
+  });
+  a.closePath();
+  a.fill();
+}
+
+function stroke(points, color, width = 4) {
+  a.strokeStyle = color;
+  a.lineWidth = width;
+  a.lineCap = "round";
+  a.lineJoin = "round";
+  a.beginPath();
+
+  points.forEach(([x,y], i) => {
+    if (i === 0) a.moveTo(x,y);
+    else a.lineTo(x,y);
+  });
+
+  a.stroke();
+}
+
+function smallHeart(x, y, size, color) {
+  a.save();
+  a.translate(x,y);
+  a.scale(size,size);
+  a.fillStyle = color;
+  a.beginPath();
+  a.moveTo(0,.85);
+  a.bezierCurveTo(-1,.2,-1,-.65,-.45,-.65);
+  a.bezierCurveTo(-.15,-.65,0,-.4,0,-.3);
+  a.bezierCurveTo(0,-.4,.15,-.65,.45,-.65);
+  a.bezierCurveTo(1,-.65,1,.2,0,.85);
+  a.fill();
+  a.restore();
+}
+
+function drawHeart() {
+  polygon([
+    [160,83], [125,48], [82,45], [44,80],
+    [38,127], [65,171], [160,268],
+    [255,171], [282,127], [276,80],
+    [238,45], [195,48]
+  ], "#ff365e");
+
+  polygon([
+    [82,45], [125,48], [160,83],
+    [100,145], [44,80]
+  ], "#ff7391");
+
+  polygon([
+    [160,83], [195,48], [238,45],
+    [276,80], [205,151]
+  ], "#ee2858");
+
+  polygon([
+    [65,171], [160,268], [160,162]
+  ], "#b91449");
+}
+
+function bunny(x, mirror) {
+  a.save();
+  a.translate(x,0);
+  a.scale(mirror,1);
+
+  // Corpo e patinhas
+  ellipse(-8,231,43,47,"#e7dbea",-.14);
+  ellipse(-35,267,23,12,"#fff1f3");
+  ellipse(20,267,24,12,"#fff1f3");
+
+  // Orelhas inclinadas em direções diferentes
+  ellipse(-27,96,17,61,"#fff0f0",-.22);
+  ellipse(10,95,17,64,"#f5e6f0",.13);
+  ellipse(-27,96,8,44,"#ef9fb7",-.22);
+  ellipse(10,95,8,46,"#f4adc2",.13);
+
+  // Cabeça e focinho virados para o centro
+  ellipse(-4,166,48,46,"#fff1f0");
+  ellipse(34,181,23,17,"#fff1f0");
+
+  // Olho fechado
+  stroke([[8,158],[15,164],[23,157]],"#44394a",4);
+
+  // Bochecha
+  ellipse(18,181,12,8,"#f391af");
+
+  // Nariz e boca do beijinho
+  ellipse(49,175,4,3,"#c7688c");
+  stroke([[48,184],[54,187],[48,190]],"#a45579",3);
+
+  // Braço
+  ellipse(26,221,13,29,"#fff2f2",-.65);
+
+  a.restore();
+}
+
+function drawBunnies() {
+  bunny(110,1);
+  bunny(210,-1);
+
+  smallHeart(160,89,17,"#ff467a");
+  smallHeart(150,52,8,"#ff9bb7");
+}
+
+function drawStitch() {
+  // Orelhas grandes
+  polygon([
+    [99,127],[16,75],[27,147],
+    [75,193],[109,174]
+  ], "#3375b6");
+
+  polygon([
+    [88,137],[28,92],[40,143],[78,174]
+  ], "#d68bb7");
+
+  polygon([
+    [221,127],[304,75],[293,147],
+    [245,193],[211,174]
+  ], "#3375b6");
+
+  polygon([
+    [232,137],[292,92],[280,143],[242,174]
+  ], "#d68bb7");
+
+  // Corpo, pés e braços
+  ellipse(160,241,52,48,"#347abf");
+  ellipse(160,246,29,32,"#91cee3");
+  ellipse(118,280,28,13,"#347abf");
+  ellipse(202,280,28,13,"#347abf");
+  ellipse(107,230,16,35,"#428bd0",.45);
+  ellipse(213,230,16,35,"#428bd0",-.45);
+
+  // Cabeça
+  ellipse(160,155,78,67,"#3d8bce");
+  polygon([
+    [137,100],[130,72],[154,91],
+    [165,68],[176,95],[193,86],[189,109]
+  ], "#3d8bce");
+
+  // Máscara dos olhos
+  ellipse(126,151,27,33,"#a1d4e5",.19);
+  ellipse(194,151,27,33,"#a1d4e5",-.19);
+
+  // Olhos
+  ellipse(127,153,15,23,"#101a32",.12);
+  ellipse(193,153,15,23,"#101a32",-.12);
+  ellipse(122,145,5,7,"#fff");
+  ellipse(188,145,5,7,"#fff");
+
+  // Focinho e nariz
+  ellipse(160,182,37,23,"#80bcd9");
+  ellipse(160,171,21,14,"#172e61");
+  ellipse(153,166,7,3,"#5b72a2");
+
+  // Sorriso
+  stroke([
+    [124,188],[137,199],[160,204],[183,199],[196,188]
+  ], "#172e61",4);
+
+  // Pequeno coração nas mãos
+  smallHeart(160,240,23,"#ff467a");
+}
+
+function sampleDrawing(draw) {
+  a.clearRect(0,0,320,320);
+  draw();
+
+  const pixels = a.getImageData(0,0,320,320).data;
+  const cells = [];
+
+  for (let y = 2; y < 320; y += 5) {
+    for (let x = 2; x < 320; x += 5) {
+      const i = (y * 320 + x) * 4;
+
+      if (pixels[i + 3] > 150) {
+        cells.push({
+          x: (x - 160) / 320,
+          y: (y - 160) / 320,
+          color: [pixels[i], pixels[i+1], pixels[i+2]]
+        });
       }
     }
-
-    words.style.fontSize = low + "px";
   }
 
-  function resize() {
-    W = stage.clientWidth;
-    H = stage.clientHeight;
-    dpr = Math.min(devicePixelRatio || 1, 2);
+  // Distribuição uniforme, com uma peça por amostra.
+  return Array.from({length: COUNT}, (_, i) => {
+    const cell = cells[Math.min(
+      cells.length - 1,
+      Math.floor((i + .5) * cells.length / COUNT)
+    )];
 
-    canvas.width = Math.round(W * dpr);
-    canvas.height = Math.round(H * dpr);
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    return {
+      x: cell.x,
+      y: cell.y,
+      color: cell.color.slice()
+    };
+  });
+}
 
-    heartSize = Math.min(W * .84, H * .57, 560);
-    heartX = W / 2;
-    heartY = H * .43;
+targetSets = [
+  sampleDrawing(drawHeart),
+  sampleDrawing(drawBunnies),
+  sampleDrawing(drawStitch)
+];
 
-    fitText();
-  }
+function makeParticles() {
+  particles = Array.from({length: COUNT}, () => {
+    const angle = rand(0, Math.PI * 2);
+    const radius = rand(.8,1.8);
 
-  window.addEventListener("resize", resize);
-  if (window.visualViewport) {
-    window.visualViewport.addEventListener("resize", resize);
-  }
-  resize();
+    const vertices = [];
+    const sides = Math.random() > .5 ? 3 : 4;
 
-  /*
-    Coordenadas normalizadas:
-    o contorno forma um coração e cada célula interior
-    é dividida em fragmentos triangulares diferentes.
-  */
-  const outline = [
-    [0, -.28],
-    [-.15, -.43],
-    [-.32, -.44],
-    [-.47, -.29],
-    [-.49, -.09],
-    [-.38, .10],
-    [0, .48],
-    [.38, .10],
-    [.49, -.09],
-    [.47, -.29],
-    [.32, -.44],
-    [.15, -.43]
-  ];
+    for (let j = 0; j < sides; j++) {
+      const ang = j / sides * Math.PI * 2;
+      const r = rand(.007,.012);
 
-  function insideHeart(x, y) {
-    let inside = false;
-
-    for (let i = 0, j = outline.length - 1;
-         i < outline.length; j = i++) {
-      const [xi, yi] = outline[i];
-      const [xj, yj] = outline[j];
-
-      if (((yi > y) !== (yj > y)) &&
-          x < (xj - xi) * (y - yi) / (yj - yi) + xi) {
-        inside = !inside;
-      }
-    }
-
-    return inside;
-  }
-
-  // Découpe chaque triangle aux limites du cœur.
-  function clipPolygon(poly) {
-    let result = poly;
-
-    // Deux moitiés convexes pour respecter le creux du cœur.
-    return result;
-  }
-
-  function buildPieces() {
-    pieces = [];
-
-    const n = 12;
-    const grid = [];
-
-    for (let row = 0; row <= n; row++) {
-      grid[row] = [];
-      for (let col = 0; col <= n; col++) {
-        grid[row][col] = {
-          x: -.51 + col * 1.02 / n + random(-.014, .014),
-          y: -.47 + row * 1.02 / n + random(-.014, .014)
-        };
-      }
-    }
-
-    function add(poly) {
-      const x = poly.reduce((sum, p) => sum + p.x, 0) / poly.length;
-      const y = poly.reduce((sum, p) => sum + p.y, 0) / poly.length;
-
-      if (!insideHeart(x, y)) return;
-
-      const angle = random(0, Math.PI * 2);
-      const distance = random(1.1, 2);
-
-      pieces.push({
-        x, y,
-        vertices: poly.map(p => ({x: p.x - x, y: p.y - y})),
-        startX: Math.cos(angle) * distance,
-        startY: Math.sin(angle) * distance,
-        delay: random(0, 1.7),
-        rotation: random(-5, 5),
-        hue: random(340, 365),
-        light: random(39, 66),
-        vx: 0, vy: 0,
-        spin: random(-9, 9),
-        ex: 0, ey: 0,
-        er: 0
+      vertices.push({
+        x: Math.cos(ang) * r,
+        y: Math.sin(ang) * r
       });
     }
 
-    for (let r = 0; r < n; r++) {
-      for (let c = 0; c < n; c++) {
-        const a = grid[r][c];
-        const b = grid[r][c + 1];
-        const d = grid[r + 1][c];
-        const e = grid[r + 1][c + 1];
+    return {
+      x: Math.cos(angle) * radius,
+      y: Math.sin(angle) * radius,
+      rotation: rand(-5,5),
+      color: [255,60,110],
+      vertices,
+      vx: 0, vy: 0,
+      spin: rand(-9,9),
+      fromX: 0, fromY: 0,
+      fromRotation: 0,
+      fromColor: [255,60,110],
+      delay: rand(0,1.15)
+    };
+  });
+}
 
-        if (Math.random() > .5) {
-          add([a, b, e]);
-          add([a, e, d]);
-        } else {
-          add([a, b, d]);
-          add([b, e, d]);
-        }
-      }
-    }
+function prepareAssembly(index, now) {
+  scene = index;
+  targets = targetSets[index];
+
+  particles.forEach(p => {
+    p.fromX = p.x;
+    p.fromY = p.y;
+    p.fromRotation = p.rotation;
+    p.fromColor = p.color.slice();
+    p.delay = rand(0,.8);
+  });
+
+  startTime = now;
+  state = "assembling";
+}
+
+function showCaption() {
+  caption.textContent = ["Clica aqui","Us","Love U"][scene];
+  caption.classList.toggle("small", scene === 0);
+  caption.classList.add("visible");
+}
+
+function begin() {
+  makeParticles();
+  stage.classList.add("active");
+  prepareAssembly(0, performance.now());
+}
+
+function emitEffects() {
+  smoke = Array.from({length: 35}, () => {
+    const angle = rand(0,Math.PI*2);
+    const speed = rand(.08,.4);
+
+    return {
+      x: rand(-.04,.04),
+      y: rand(-.04,.04),
+      vx: Math.cos(angle)*speed,
+      vy: Math.sin(angle)*speed-.05,
+      r: rand(.025,.075),
+      life: rand(1.6,2.8),
+      tint: Math.random() > .5 ? "115,75,105" : "95,100,120"
+    };
+  });
+
+  sparks = Array.from({length: 90}, () => {
+    const angle = rand(0,Math.PI*2);
+    const speed = rand(.3,1.8);
+
+    return {
+      x: 0, y: 0,
+      vx: Math.cos(angle)*speed,
+      vy: Math.sin(angle)*speed,
+      life: rand(.5,1.7)
+    };
+  });
+}
+
+function explode(now) {
+  caption.classList.remove("visible");
+  nextScene = scene + 1;
+  startTime = now;
+  state = "exploding";
+
+  particles.forEach(p => {
+    const angle = Math.atan2(p.y,p.x) + rand(-.7,.7);
+    const speed = rand(.5,1.6);
+    p.vx = Math.cos(angle)*speed;
+    p.vy = Math.sin(angle)*speed-.15;
+  });
+
+  emitEffects();
+}
+
+function reset() {
+  state = "black";
+  particles = [];
+  smoke = [];
+  sparks = [];
+
+  caption.classList.remove("visible");
+  message.classList.remove("visible");
+  stage.classList.remove("active");
+}
+
+stage.addEventListener("click", () => {
+  const now = performance.now();
+
+  if (state === "black") {
+    begin();
+  } else if (state === "ready") {
+    explode(now);
+  } else if (state === "final" && now > readyAfter) {
+    reset();
   }
+});
 
-  function traceHeart() {
-    ctx.beginPath();
-    outline.forEach(([x, y], i) => {
-      const px = heartX + x * heartSize;
-      const py = heartY + y * heartSize;
-      if (i === 0) ctx.moveTo(px, py);
-      else ctx.lineTo(px, py);
-    });
-    ctx.closePath();
-  }
+function drawPiece(p, alpha = 1) {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.translate(cx + p.x*scale, cy + p.y*scale);
+  ctx.rotate(p.rotation);
 
-  function drawPiece(piece, x, y, rotation, alpha) {
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    ctx.translate(x, y);
-    ctx.rotate(rotation);
+  ctx.beginPath();
+  p.vertices.forEach((v,i) => {
+    if (i === 0) ctx.moveTo(v.x*scale,v.y*scale);
+    else ctx.lineTo(v.x*scale,v.y*scale);
+  });
+  ctx.closePath();
 
-    ctx.beginPath();
-    piece.vertices.forEach((v, i) => {
-      const px = v.x * heartSize * .94;
-      const py = v.y * heartSize * .94;
-      if (i === 0) ctx.moveTo(px, py);
-      else ctx.lineTo(px, py);
-    });
-    ctx.closePath();
+  const [r,g,b] = p.color.map(v => Math.round(v));
+  const gradient = ctx.createLinearGradient(-6,-8,7,9);
 
-    const gradient = ctx.createLinearGradient(-15, -20, 20, 25);
-    gradient.addColorStop(0,
-      `hsl(${piece.hue}, 95%, ${piece.light + 12}%)`);
-    gradient.addColorStop(.5,
-      `hsl(${piece.hue}, 88%, ${piece.light}%)`);
-    gradient.addColorStop(1,
-      `hsl(${piece.hue}, 88%, ${piece.light - 20}%)`);
+  gradient.addColorStop(0,
+    `rgb(${Math.min(255,r+24)},${Math.min(255,g+24)},${Math.min(255,b+24)})`);
+  gradient.addColorStop(.55,`rgb(${r},${g},${b})`);
+  gradient.addColorStop(1,
+    `rgb(${Math.round(r*.72)},${Math.round(g*.72)},${Math.round(b*.72)})`);
+
+  ctx.fillStyle = gradient;
+  ctx.fill();
+  ctx.strokeStyle = "rgba(0,0,0,.32)";
+  ctx.lineWidth = .65;
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawEffects(dt) {
+  for (const p of smoke) {
+    p.life -= dt;
+    if (p.life <= 0) continue;
+
+    p.x += p.vx*dt;
+    p.y += p.vy*dt;
+    p.vx *= Math.exp(-dt);
+    p.vy -= .025*dt;
+    p.r += .08*dt;
+
+    const x = cx+p.x*scale;
+    const y = cy+p.y*scale;
+    const radius = p.r*scale;
+    const alpha = Math.min(.22,p.life*.14);
+
+    const gradient = ctx.createRadialGradient(x,y,0,x,y,radius);
+    gradient.addColorStop(0,`rgba(${p.tint},${alpha})`);
+    gradient.addColorStop(1,`rgba(${p.tint},0)`);
 
     ctx.fillStyle = gradient;
-    ctx.fill();
+    ctx.fillRect(x-radius,y-radius,radius*2,radius*2);
+  }
 
-    ctx.strokeStyle = "rgba(255,190,210,.45)";
-    ctx.lineWidth = 1;
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+
+  for (const p of sparks) {
+    p.life -= dt;
+    if (p.life <= 0) continue;
+
+    p.x += p.vx*dt;
+    p.y += p.vy*dt;
+    p.vy += .4*dt;
+    p.vx *= Math.exp(-dt*.7);
+
+    ctx.globalAlpha = Math.min(1,p.life*1.5);
+    ctx.strokeStyle = "#ffc3d4";
+    ctx.lineWidth = 1.4;
+
+    ctx.beginPath();
+    ctx.moveTo(cx+p.x*scale,cy+p.y*scale);
+    ctx.lineTo(
+      cx+(p.x-p.vx*.025)*scale,
+      cy+(p.y-p.vy*.025)*scale
+    );
     ctx.stroke();
-    ctx.restore();
   }
 
-  function startBuilding() {
-    buildPieces();
-    started = performance.now();
-    state = "building";
-    stage.classList.add("active");
+  ctx.restore();
+}
+
+function frame(now) {
+  const dt = Math.min((now-lastTime)/1000 || .016,.035);
+  lastTime = now;
+
+  ctx.clearRect(0,0,W,H);
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0,0,W,H);
+
+  const elapsed = (now-startTime)/1000;
+
+  if (state !== "black") {
+    const glow = ctx.createRadialGradient(
+      cx,cy,0,cx,cy,scale*.65
+    );
+    glow.addColorStop(0,
+      scene === 2 ? "rgba(15,65,130,.17)" : "rgba(130,0,45,.14)");
+    glow.addColorStop(1,"rgba(0,0,0,0)");
+    ctx.fillStyle = glow;
+    ctx.fillRect(0,0,W,H);
   }
 
-  function explode() {
-    if (state !== "ready") return;
+  let shake = 0;
 
-    cta.hidden = true;
-    state = "exploding";
-    exploded = performance.now();
-
-    pieces.forEach(p => {
-      const angle = Math.atan2(p.y, p.x) + random(-.55, .55);
-      const speed = random(.45, 1.65);
-      p.vx = Math.cos(angle) * speed;
-      p.vy = Math.sin(angle) * speed - .25;
-    });
-
-    smoke = Array.from({length: 42}, () => {
-      const angle = random(0, Math.PI * 2);
-      const speed = random(.08, .45);
-
-      return {
-        x: heartX + random(-20, 20),
-        y: heartY + random(-20, 20),
-        vx: Math.cos(angle) * speed * heartSize,
-        vy: Math.sin(angle) * speed * heartSize - 30,
-        radius: random(12, 35),
-        life: random(1.5, 3),
-        maxLife: 3,
-        shade: Math.random() > .6 ? "130,45,65" : "95,90,105"
-      };
-    });
-
-    sparks = Array.from({length: 100}, () => {
-      const angle = random(0, Math.PI * 2);
-      const speed = random(90, 650);
-
-      return {
-        x: heartX, y: heartY,
-        vx: Math.cos(angle) * speed,
-        vy: Math.sin(angle) * speed,
-        life: random(.4, 1.4),
-        size: random(1, 3)
-      };
-    });
-
-    dust = Array.from({length: 60}, () => ({
-      x: heartX, y: heartY,
-      vx: random(-180, 180),
-      vy: random(-180, 100),
-      life: random(1, 3),
-      size: random(1, 3)
-    }));
+  if (state === "exploding") {
+    shake = Math.max(0,1-elapsed/.45)*10;
   }
 
-  function reset() {
-    state = "black";
-    cta.hidden = true;
-    message.classList.remove("visible");
-    stage.classList.remove("active");
-    pieces = [];
-    smoke = [];
-    sparks = [];
-    dust = [];
-  }
+  ctx.save();
+  ctx.translate(rand(-shake,shake),rand(-shake,shake));
 
-  cta.addEventListener("click", event => {
-    event.stopPropagation();
-    explode();
-  });
+  if (state === "assembling") {
+    particles.forEach((p,i) => {
+      const t = clamp((elapsed-p.delay)/1.5,0,1);
+      const e = ease(t);
+      const target = targets[i];
 
-  stage.addEventListener("click", () => {
-    if (state === "black") startBuilding();
-    else if (state === "message") reset();
-  });
+      p.x = p.fromX+(target.x-p.fromX)*e;
+      p.y = p.fromY+(target.y-p.fromY)*e;
+      p.rotation = p.fromRotation*(1-e);
 
-  function drawSmoke(dt) {
-    for (const p of smoke) {
-      p.life -= dt;
-      if (p.life <= 0) continue;
-
-      p.x += p.vx * dt;
-      p.y += p.vy * dt;
-      p.vx *= Math.exp(-1.1 * dt);
-      p.vy -= 10 * dt;
-      p.radius += 35 * dt;
-
-      const opacity = Math.min(.28, p.life * .19);
-      const g = ctx.createRadialGradient(
-        p.x, p.y, 0, p.x, p.y, p.radius
+      p.color = p.fromColor.map((v,j) =>
+        v+(target.color[j]-v)*e
       );
 
-      g.addColorStop(0, `rgba(${p.shade},${opacity})`);
-      g.addColorStop(.55, `rgba(${p.shade},${opacity * .5})`);
-      g.addColorStop(1, `rgba(${p.shade},0)`);
+      drawPiece(p, Math.min(1,t*5));
+    });
 
-      ctx.fillStyle = g;
-      ctx.fillRect(
-        p.x - p.radius, p.y - p.radius,
-        p.radius * 2, p.radius * 2
-      );
+    if (elapsed > 2.35) {
+      state = "ready";
+      showCaption();
     }
   }
 
-  function drawSparks(dt) {
-    ctx.save();
-    ctx.globalCompositeOperation = "lighter";
+  if (state === "ready") {
+    particles.forEach(p => drawPiece(p));
+  }
 
-    for (const p of sparks) {
-      p.life -= dt;
-      if (p.life <= 0) continue;
+  if (state === "exploding") {
+    const alpha = nextScene >= 3
+      ? clamp(1-elapsed/1.6,0,1)
+      : 1;
 
-      p.x += p.vx * dt;
-      p.y += p.vy * dt;
-      p.vy += 190 * dt;
-      p.vx *= Math.exp(-.8 * dt);
+    particles.forEach(p => {
+      p.x += p.vx*dt;
+      p.y += p.vy*dt;
+      p.vy += .65*dt;
+      p.rotation += p.spin*dt;
+      drawPiece(p,alpha);
+    });
 
-      ctx.globalAlpha = Math.min(1, p.life * 2);
-      ctx.strokeStyle = "#ffbd9c";
-      ctx.lineWidth = p.size;
+    if (elapsed < .75) {
+      ctx.strokeStyle =
+        `rgba(255,165,195,${(1-elapsed/.75)*.7})`;
+      ctx.lineWidth = 1+(1-elapsed/.75)*4;
       ctx.beginPath();
-      ctx.moveTo(p.x, p.y);
-      ctx.lineTo(p.x - p.vx * .025, p.y - p.vy * .025);
+      ctx.arc(cx,cy,elapsed*Math.max(W,H),0,Math.PI*2);
       ctx.stroke();
     }
-
-    ctx.restore();
-
-    for (const p of dust) {
-      p.life -= dt;
-      if (p.life <= 0) continue;
-
-      p.x += p.vx * dt;
-      p.y += p.vy * dt;
-      p.vy += 22 * dt;
-
-      ctx.fillStyle = `rgba(255,85,125,${Math.min(.7, p.life)})`;
-      ctx.fillRect(p.x, p.y, p.size, p.size);
-    }
   }
 
-  function frame(now) {
-    const dt = Math.min((now - lastFrame) / 1000 || .016, .035);
-    lastFrame = now;
+  if (state !== "black") {
+    drawEffects(dt);
+  }
 
-    ctx.clearRect(0, 0, W, H);
-    ctx.fillStyle = "#000";
-    ctx.fillRect(0, 0, W, H);
+  ctx.restore();
 
-    if (state === "building" || state === "ready") {
-      const elapsed = (now - started) / 1000;
+  if (state === "exploding" && elapsed < .14) {
+    ctx.fillStyle =
+      `rgba(255,215,235,${(1-elapsed/.14)*.5})`;
+    ctx.fillRect(0,0,W,H);
+  }
 
-      const glow = ctx.createRadialGradient(
-        heartX, heartY, 0,
-        heartX, heartY, heartSize * .7
-      );
-      glow.addColorStop(0, "rgba(150,0,45,.18)");
-      glow.addColorStop(1, "rgba(0,0,0,0)");
-      ctx.fillStyle = glow;
-      ctx.fillRect(0, 0, W, H);
-
-      /*
-        Peças em movimento ficam livres.
-        Ao assentarem, são recortadas pelo contorno.
-      */
-      for (const p of pieces) {
-        const progress = clamp((elapsed - p.delay) / 1.25, 0, 1);
-        if (progress === 0) continue;
-
-        const e = ease(progress);
-        const x = heartX + (p.x + p.startX * (1 - e)) * heartSize;
-        const y = heartY + (p.y + p.startY * (1 - e)) * heartSize;
-
-        ctx.save();
-
-        if (progress === 1) {
-          traceHeart();
-          ctx.clip();
-        }
-
-        drawPiece(p, x, y, p.rotation * (1 - e), Math.min(1, progress * 4));
-        ctx.restore();
-      }
-
-      if (state === "building" && elapsed > 3.05) {
-        state = "ready";
-        cta.hidden = false;
-      }
+  if (state === "exploding") {
+    if (nextScene < 3 && elapsed > 1.1) {
+      prepareAssembly(nextScene,now);
+    } else if (nextScene >= 3 && elapsed > 1.65) {
+      state = "final";
+      fitText();
+      message.classList.add("visible");
+      readyAfter = now+1100;
     }
-
-    if (state === "exploding" || state === "message") {
-      const elapsed = (now - exploded) / 1000;
-      const shake = Math.max(0, 1 - elapsed / .5) * 12;
-
-      ctx.save();
-      ctx.translate(random(-shake, shake), random(-shake, shake));
-
-      drawSmoke(dt);
-
-      if (elapsed < 2.5) {
-        for (const p of pieces) {
-          p.ex += p.vx * dt;
-          p.ey += p.vy * dt;
-          p.vy += .85 * dt;
-          p.er += p.spin * dt;
-
-          drawPiece(
-            p,
-            heartX + (p.x + p.ex) * heartSize,
-            heartY + (p.y + p.ey) * heartSize,
-            p.er,
-            clamp(1 - elapsed / 2.5, 0, 1)
-          );
-        }
-      }
-
-      drawSparks(dt);
-
-      // Onda de choque
-      if (elapsed < .8) {
-        ctx.strokeStyle = `rgba(255,150,185,${(1 - elapsed / .8) * .8})`;
-        ctx.lineWidth = 1 + (1 - elapsed / .8) * 5;
-        ctx.beginPath();
-        ctx.arc(heartX, heartY, elapsed * Math.max(W, H), 0, Math.PI * 2);
-        ctx.stroke();
-      }
-
-      ctx.restore();
-
-      // Flash inicial breve
-      if (elapsed < .16) {
-        ctx.fillStyle = `rgba(255,210,225,${(1 - elapsed / .16) * .65})`;
-        ctx.fillRect(0, 0, W, H);
-      }
-
-      if (elapsed > 1.05 && !message.classList.contains("visible")) {
-        fitText();
-        message.classList.add("visible");
-      }
-
-      // Só permite reiniciar depois de a frase estar visível.
-      if (elapsed > 2.1) {
-        state = "message";
-      }
-    }
-
-    requestAnimationFrame(frame);
   }
 
   requestAnimationFrame(frame);
+}
+
+requestAnimationFrame(frame);
 })();
 </script>
 </body>
