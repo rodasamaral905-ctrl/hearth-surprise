@@ -1,1 +1,344 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>For You</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
 
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #000;
+    font-family: "Courier New", monospace;
+    -webkit-user-select: none;
+    user-select: none;
+    touch-action: manipulation;
+  }
+
+  #stage {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+
+  /* Efeito retro / CRT / PS2 */
+  #crt {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background:
+      repeating-linear-gradient(
+        to bottom,
+        rgba(0, 0, 0, 0.22) 0px,
+        rgba(0, 0, 0, 0.22) 2px,
+        rgba(255, 255, 255, 0.02) 3px,
+        rgba(255, 255, 255, 0.02) 4px
+      );
+    mix-blend-mode: overlay;
+    z-index: 5;
+  }
+
+  #vignette {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background: radial-gradient(
+      ellipse at center,
+      rgba(0,0,0,0) 45%,
+      rgba(0,0,0,0.75) 100%
+    );
+    z-index: 6;
+  }
+
+  #tapLayer {
+    position: fixed;
+    inset: 0;
+    z-index: 10;
+    cursor: pointer;
+  }
+</style>
+</head>
+<body>
+
+<div id="stage">
+  <canvas id="game"></canvas>
+</div>
+
+<div id="crt"></div>
+<div id="vignette"></div>
+<div id="tapLayer"></div>
+
+<script>
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+const tapLayer = document.getElementById("tapLayer");
+
+let W = 0, H = 0, DPR = 1;
+
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = window.innerWidth;
+  H = window.innerHeight;
+
+  canvas.width = W * DPR;
+  canvas.height = H * DPR;
+  canvas.style.width = W + "px";
+  canvas.style.height = H + "px";
+
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+}
+
+window.addEventListener("resize", resize);
+resize();
+
+// Coração em pixels
+const heart = [
+  "01100110",
+  "11111111",
+  "11111111",
+  "11111111",
+  "01111110",
+  "00111100",
+  "00011000"
+];
+
+let state = "black"; // black, building, ready, exploding, message
+let blocks = [];
+let particles = [];
+let buildStart = 0;
+let explodeStart = 0;
+let readyShown = false;
+
+function makeHeartBlocks() {
+  blocks = [];
+  const cols = heart[0].length;
+  const rows = heart.length;
+
+  const maxW = Math.min(W * 0.72, 420);
+  const maxH = H * 0.42;
+  const size = Math.floor(Math.min(maxW / cols, maxH / rows));
+
+  const heartW = cols * size;
+  const heartH = rows * size;
+
+  const startX = (W - heartW) / 2;
+  const startY = (H - heartH) / 2;
+
+  let index = 0;
+
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      if (heart[y][x] === "1") {
+        const targetX = startX + x * size;
+        const targetY = startY + y * size;
+
+        // Vem de lados diferentes
+        const side = Math.floor(Math.random() * 4);
+        let sx, sy;
+
+        if (side === 0) { sx = -size * 2; sy = targetY; }
+        else if (side === 1) { sx = W + size * 2; sy = targetY; }
+        else if (side === 2) { sx = targetX; sy = -size * 2; }
+        else { sx = targetX; sy = H + size * 2; }
+
+        blocks.push({
+          x: sx,
+          y: sy,
+          targetX,
+          targetY,
+          size,
+          delay: index * 18 + Math.random() * 120,
+          rotation: (Math.random() - 0.5) * 0.7,
+          color: Math.random() > 0.5 ? "#ff2d55" : "#ff5f7a"
+        });
+
+        index++;
+      }
+    }
+  }
+}
+
+function explodeHeart() {
+  particles = [];
+
+  for (const b of blocks) {
+    const cx = b.targetX + b.size / 2;
+    const cy = b.targetY + b.size / 2;
+
+    const dx = cx - W / 2;
+    const dy = cy - H / 2;
+
+    const dist = Math.max(1, Math.sqrt(dx * dx + dy * dy));
+    const power = 8 + Math.random() * 12;
+
+    particles.push({
+      x: b.targetX,
+      y: b.targetY,
+      size: b.size,
+      vx: (dx / dist) * power + (Math.random() - 0.5) * 8,
+      vy: (dy / dist) * power + (Math.random() - 0.5) * 8 - 4,
+      rotation: 0,
+      vr: (Math.random() - 0.5) * 0.35,
+      color: b.color,
+      life: 1
+    });
+  }
+}
+
+function drawBlock(x, y, size, color, rotation = 0, alpha = 1) {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.translate(x + size / 2, y + size / 2);
+  ctx.rotate(rotation);
+
+  const s = size * 0.92;
+  const half = s / 2;
+
+  // Base do bloco
+  ctx.fillStyle = color;
+  ctx.fillRect(-half, -half, s, s);
+
+  // Brilho superior, estilo plástico/LEGO
+  ctx.fillStyle = "rgba(255,255,255,0.28)";
+  ctx.fillRect(-half, -half, s, s * 0.18);
+
+  // Sombra inferior
+  ctx.fillStyle = "rgba(0,0,0,0.30)";
+  ctx.fillRect(-half, half - s * 0.18, s, s * 0.18);
+
+  // Pinos LEGO
+  ctx.fillStyle = "rgba(255,255,255,0.20)";
+  ctx.fillRect(-half + s * 0.18, -half + s * 0.10, s * 0.22, s * 0.10);
+  ctx.fillRect(half - s * 0.40, -half + s * 0.10, s * 0.22, s * 0.10);
+
+  ctx.restore();
+}
+
+function drawRetroText(text, size, color, y) {
+  ctx.save();
+  ctx.font = "bold " + size + "px 'Courier New', monospace";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+
+  // Efeito glitch simples
+  ctx.fillStyle = "rgba(255,0,80,0.55)";
+  ctx.fillText(text, W / 2 + 2, y + 2);
+
+  ctx.fillStyle = "rgba(0,220,255,0.45)";
+  ctx.fillText(text, W / 2 - 2, y - 2);
+
+  ctx.fillStyle = color;
+  ctx.fillText(text, W / 2, y);
+
+  ctx.restore();
+}
+
+function loop(now) {
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, W, H);
+
+  if (state === "building") {
+    const elapsed = now - buildStart;
+    let done = true;
+
+    for (const b of blocks) {
+      const t = Math.max(0, Math.min(1, (elapsed - b.delay) / 850));
+
+      if (t < 1) done = false;
+
+      // Ease-out cubic
+      const e = 1 - Math.pow(1 - t, 3);
+
+      const x = b.x + (b.targetX - b.x) * e;
+      const y = b.y + (b.targetY - b.y) * e;
+
+      drawBlock(x, y, b.size, b.color, b.rotation * (1 - e));
+    }
+
+    if (done && !readyShown) {
+      readyShown = true;
+      state = "ready";
+    }
+  }
+
+  if (state === "ready") {
+    for (const b of blocks) {
+      drawBlock(b.targetX, b.targetY, b.size, b.color, 0);
+    }
+
+    const pulse = 0.72 + Math.sin(now / 260) * 0.18;
+    ctx.globalAlpha = pulse;
+    drawRetroText("Clica aqui", Math.min(W * 0.075, 34), "#fff", H * 0.82);
+    ctx.globalAlpha = 1;
+  }
+
+  if (state === "exploding" || state === "message") {
+    const elapsed = now - explodeStart;
+
+    for (const p of particles) {
+      p.x += p.vx;
+      p.y += p.vy;
+      p.vy += 0.35;
+      p.rotation += p.vr;
+      p.life -= 0.006;
+
+      if (p.life > 0) {
+        drawBlock(p.x, p.y, p.size, p.color, p.rotation, Math.max(0, p.life));
+      }
+    }
+
+    if (elapsed > 700) {
+      state = "message";
+      drawRetroText(
+        "This may be Digital,",
+        Math.min(W * 0.055, 26),
+        "#fff",
+        H * 0.42
+      );
+
+      drawRetroText(
+        "but my love for you is real",
+        Math.min(W * 0.055, 26),
+        "#fff",
+        H * 0.50
+      );
+    }
+  }
+
+  requestAnimationFrame(loop);
+}
+
+requestAnimationFrame(loop);
+
+tapLayer.addEventListener("click", () => {
+  if (state === "black") {
+    makeHeartBlocks();
+    buildStart = performance.now();
+    readyShown = false;
+    state = "building";
+  } else if (state === "ready") {
+    explodeHeart();
+    explodeStart = performance.now();
+    state = "exploding";
+  } else if (state === "message") {
+    blocks = [];
+    particles = [];
+    state = "black";
+  }
+});
+</script>
+
+</body>
+</html>
